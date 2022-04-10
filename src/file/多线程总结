@@ -101,7 +101,24 @@ synchronized深入到jvm底层是和对象头息息相关的。
 3. 在持有这个轻量锁的线程执行完同步方法后，在通过CAS重置轻量锁的对象头的时候,发现自己的Lock Record和轻量锁的对象头不同，因为轻量锁的锁标识已经被其他线程的修改为重量锁标识，所以在释放锁的同时，会唤醒正在等待该轻量锁的而阻塞的线程。
 
 ####4.重量锁
-TODO
+>ObjectMonitor内置锁的概念*缺图*
+- CXQ队列（_cxq）：竞争队列，所有请求锁的线程首先会被放在这个队列中（单向链接 
+   - 并不是一个真正的queue，是一个临界资源。有node及其next指针逻辑构成，是一个后进先出（LIFO）的队列（栈）。 
+   - 【每次新加入Node时都会在队头进行，通过CAS改变第一个节点的的指针为新增节点（新线程），同时设置新增节点的next指向后续节点。通过这种方式减轻了队列取数据时的争用问题。而且该结构是个Lock-Free的队列无锁队列（实际上就是通过CAS不断的尝试来实现的）。 】
+- EntryList：CXQ队列中有资格成为候选资源的线程会被移动到该队列中 
+  - 获得锁得到执行权力的Owner线程在释放锁时会从CXQ队列或EntryList中挑选一个线程唤醒，到底唤醒哪个取决于Monitor的策略
+- OnDeck：任何时刻最多只能有一个线程正在竞争锁，该线程称为OnDeck
+- Owner：获得锁的线程称为Owner。初始时为NULL，当有线程占有该monitor的锁的时候，Owner标记为该线程的唯一标识，当线程释放monitor时，Owner又恢复为NULL。
+- WaitSet：如果Owner线程被wait方法阻塞，则转移到WaitSet队列
+  - 如果Owner线程被wait方法阻塞，则转移到WaitSet队列。当wait的线程在某个时刻被notify/notifyAll之后，会将对应的ObjectWaiter从WaitSet移动到EntryList或CXQ队列中
+>重量锁的加锁过程
+1. 线程先尝试讲moniter对象的_owner通过cas指向改线程，要是成功了，_recursions更新为1，表示为重入锁。若失败便会自旋。
+2. 自旋若没有获取到锁，会将当前线程包装这个objectWait对象，插入到_cxq队列的头部，并继续进行cas尝试获取锁。
+3. 若还是失败，便会查看对象的__Responsible的指针是不是null，如果这个指针为null，代表之前对象锁没有等待线程。也就说明当前线程为第一个等待线程。
+这时候会通过cas将_Responsible指向自己。接下来便会指向退避算法，进行一个短时间的阻塞等待。 //这个算法很简单，第一次等待1 ms，第二次等待8 ms，第三次等待64 ms，以此类推，直到达到等待时长的上限 1000 ms，也就是说在synchronize在一个对象锁上的线程，如果它是第一个等待线程的话，那么它会不停滴休眠、检查锁，休眠的时间由刚才的退避算法指定。如果当前线程不是第一个等待线程，那么只能执行无限期的休眠，一直等待对象锁的exit函数执行唤醒才行；
+
+>重量锁的解锁过程
+1. 如果recursions不是0，说明是重量锁，直接--便可以。
 
 ### 2.使用显示锁-ReentrantLock
 > synchronized是一种隐式锁，ReentrantLock是一种显示锁，需要自己进行加锁解锁，更加灵活。重入锁，即一个线程可以反复的进入这种锁。
@@ -128,10 +145,136 @@ TODO
 
 ![avatar](pic/ReentrantLock.png)
 
-### 使用volatile
-### 使用原子变量和cas
-### 写时复制
-### 使用threadLocal
+#####与condition的配合
+1. 重点方法：
+   1. await() 线程等待，同事释放锁，当其他线程使用signal方法或使用signalAll()方法时候，线程会重新获取锁，并继续执行。
+   2. signal()和signalAll()方法唤醒一个/全部等待中的线程。
+2. ArrayBlockQueue内部使用
+   - （仅写了condition的相关方法）
+```java
+import java.util.concurrent.locks.Condition;
+
+class test {
+    ReentrantLock lock = new ReentrantLock(fair);
+    Condition condition = lock.newCondition();  // 生成一个与lock绑定的condition
+    // put方法
+    public void put(E e) {
+        lock.lockInterruptibly();   //获取锁 进行同步
+        if(true){    //队列已经满了
+            condition.await();
+        }else{
+            condition.signal(); // 不满进行添加
+        }
+    }
+}
+```
+### 3.使用volatile
+#### 内存模型（JMM）
+1. 原子性
+   - 原子性指一个操作是不可以中断的，要么全部成功，要么全部失败。
+2. 可见性
+   - 指的是当一个线程修改了某个共享变量的值得时候，其他线程是否能立即知道这个修改。
+3. 有序性
+   - 程序的执行有先后。为了编译器和处理器的效率，JMM进行了执行重排。
+   - 指令执行分为以下几步:
+     - 取指IF
+     - 译码和取寄存器数ID
+     - 执行或者有效地址计算EX
+     - 存储器访问MEM
+     - 写回WB
+
+
+![avatar](pic/jmm.png)
+#####volatile相关
+1. volatile保证的*可见性*和*有序性*，不能保证原子性。
+2. volatile在执行写操作后，jmm会把工作内存的最新变量强制刷新到主内存。
+3. volatile写操作会使其他的线程中的缓存无效
+
+### 4.使用原子变量和cas
+*CAS是JAVA并发包的基础，基于它可以实现更高效，乐观，非阻塞的数据结构和算法，也是并发包中锁，同步工具，和各种容器的基础。*
+原子变量的基础是CAS,一般的计算机系统都在硬件层次上直接支持CAS指令。**通过循环CAS的方式实现原子更新是一种重要的思维。**
+
+####CAS
+CAS是(compare and swap),就是比较交换。
+CAS操作包含三个操作数 【内存数值（V）、原值（A）和新值（B）】。
+更新前会获取内存数值作为原值，更新时判断内存地址里面的值和原值是一样的，那么就将内存里面的值更新成B。
+如果在第一轮循环中，a线程获取地址里面的值被b线程修改了，那么a线程需要自旋，重新获取内存位置的值,再比较更新,如果一直比较不相等,就会一直循环cas.比较消耗cpu.
+>CAS乐观锁
+>>java.util.concurrent.atomic.AtomicLong源码中的自增getAndIncrement()方法：AtomicInteger的compareAndSet(int expect, int update)方法实际是调用的Unsafe类
+
+####CAS优缺点
+优点 : 对比悲观锁性能上有很大的提高
+缺点 :  
+1. 存在ABA的问题.把原内存地址的值由A改成B,再改成A.此时cas无法判断.需要另外加版本号来区分。
+2. 循环cas.可能会花费大量时间循环,比较浪费CPU。
+
+### 5.写时复制
+线程安全的问题，是因为多个线程并发读写同一个对象。如果每个线程读写的对象都是不同的，或者如果共享访问的对象是只读的，不能修改，那也就不存在线程安全的问题了。
+**未完待续**
+### 6.使用threadLocal
+threadLocal：只有当前线程可以访问数据。
+####实现原理
+1. set方法 
+   - 首先获取当前线程对象，通过getMap拿出来线程的ThreadLocalMap。并将值存入到ThreadLocalMap中。其中key就是ThreadLocal当前的像，value就是需要的值。而map本身就保存了自己的"局部变量"。
+```java
+class thread{
+    public void set(T value){
+        Thread t = Thread.currentThread();
+        ThreadLocalMap map = getMap(t);
+        if(map!=null){
+            map.set(this, value);
+        }else{
+            creatMap(t,value);
+        }
+    }
+}
+```
+2. get方法
+   - get方法就是先获取当前线程的ThreadLocal对象，然后通过将自己作为key取得内部的实际数据。
+```java
+class thread{
+  public T get(){
+      Thread thread = Thread.currentThread();
+      ThreadLocalMap map = getMap(t);
+      if(map!=null){
+        ThreadLocalMap.Entry e = map.getEntry(this);
+        if(e!=null){
+            return (T)e.getValue();
+        }
+      }
+  }
+}
+```
+
+3. **ThreadLockMap是一个类似hashMapde的东西，更确定来说是类似WeakHashMap**，它的实现使用了弱引用。在垃圾回收的时候，java虚拟机发现了弱引用就会立即回收。
+ThreadLocalMap内部由一系列Entry构成，每个Entry都是WeakReference<ThreadLocal>.
+
+```java
+import java.lang.ref.WeakReference;
+
+static class Entry extends WeakReference<ThreadLocal>{
+    Entry(ThreadLocal k, Object v){
+        super(k);
+        value = v;
+    }
+}
+```
+这里的参数ke就是map的key，v就是map的value，其中k也是ThreadLocal实例，作为弱引用的使用。
+因此，虽然这里使用ThreadLocal作为Map的key，但实际上，他并不是真的持有ThreadLocal的引用。而是当TreadLocal的外部强引用被回收的时候，其key会变成null.当系统进行ThreadLocalMap清理的时候，就会将垃圾数据回收了。
+
+####ThreadLcoak容易造成内存泄漏的地方
+1. ThreadLocal本身对象泄漏
+   - 使用的时候，会将其本身存储到Thread类的`ThreadLocal.ThreadLocalMap threadLocals`属性中。使用完ThreadLocal对象之后，手工设置对象为空null，通过GC是会被回收调的。这个是JDK本身来保证了。因为Map中元素使用了弱引用存储。
+2. ThreadLocalMap中的Entry造成内存泄漏
+   - 如果只是简单的将Entry改成弱引用，还是会有Value值的内存泄露，因为ThreadLocalMap中还一直维护着一个Entry对象，需要在ThreadLocal=null的时候，主动去remove，才能做到真正的全部回收。
+- 如果我们不主动的清理，则可能会内存常驻，也可能会被清理掉： 
+  - ThreadLocal在get和set的时候会主动去清理一下ThreadLocalMap中key=null的Entry对象。 
+  - 在get的时候，如果命中到则直接返回，如果没有命中到则调用getEntryAfterMiss进行内存清理工作并重新rehash。 
+  - 在set的时候后，如果命令的元素key位空，则会主动的替换掉，也可能会调用cleanSomeSlots方法完成内存清理工作并重新rehash。 
+
+#### ThreadLocal对性能有什么帮助
+- 为每个线程分配一个独立的对象，对系统性能是有帮助的，但是要取决于共享对象的内部逻辑。如果共享对象对于竞争的处理容易引起性能的损失，还是应该考虑应该使用ThreadLocal为每个线程分配单独的对象、
+- 经典案例：多线程下产生随机数。
 
 ## 线程的协作机制
 ### wait/notify
@@ -157,5 +300,8 @@ TODO
 ### 定时任务
 
 ###部分参考
+- 锁相关 
 https://tech.meituan.com/2018/11/15/java-lock.html
+- volatile 
+https://www.cnblogs.com/hanease/p/15864913.html
 
