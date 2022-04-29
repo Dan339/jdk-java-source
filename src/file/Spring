@@ -1,0 +1,36 @@
+##1. SpringIoc的理解，原理以及底层实现？
+###总体概括：
+首先是用到了**控制反转**的思想，之前我们操作对象，都需要自己来操作整个流程，现在只需要交到spring容器中，容器会帮我们自动的创建。
+这里用到**依赖注入**(DI)，把对应的属性注入到了具体的对象中，@AutoWired，是有populateBean完成属性的注入的。
+其次IOC是一个**容器**，使用的map的结构来存储，一般用到了三级缓存，singletonObject存放的是完整的对象信息。整个bean的生命周期都是交由spring的ioc容器来实现的。
+### 分别描述(可适当分析关键方法):
+![avatar](pic/refresh.jpeg)
+![avatar](pic/finsh关键点.jpeg)
+
+##2. SpringBean的生命周期以及加载流程？
+**实例化- 填充属性- 初始化- 销毁**
+![avatar](pic/bean加载流程.jpeg)
+##3. Spring如何解决循环依赖?
+
+####解决循环依赖流程
+![avatar](pic/Spring解决循环依赖.png)
+####部分详细方法
+![avatar](pic/三级缓存.jpeg)
+####删除缓存和添加缓存的时间
+三级缓存： createBeanInstance（addSingletonFactory）
+二级缓存： 第一次在三级缓存中判断对象是普通对象还是代理对象的时候会添加，同时会删除三级缓存。(getSingleton)
+一级缓存： 生成完整的对象的时候放入,删除二三级缓存。（addSingleton）
+
+##4. FactoryBean 和 BeanFactory有什么区别？
+BeanFactory是创建bean的工厂类，里面用到的反射的技术来对对象创建。
+FactoryBean是一个bean, 如果想简单的定义某一个bean的对象，还不需要spring来管理整个bean的生命周期，就可以实现此接口了。
+## Spring中的设计模式
+1. 单例模式
+   - spring的ioc中的bean默认都是单例的。
+2. 工厂模式
+   - BeanFactory来设计实现bean
+3. 观察者模式
+   - 多播器 initApplicationEvent
+4. 模板方法
+   - 各种postProcess
+##6. Spring的事务（未整理）
