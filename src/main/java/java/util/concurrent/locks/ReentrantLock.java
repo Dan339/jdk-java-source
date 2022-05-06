@@ -112,6 +112,7 @@ public class ReentrantLock implements Lock, java.io.Serializable {
      * Base of synchronization control for this lock. Subclassed
      * into fair and nonfair versions below. Uses AQS state to
      * represent the number of holds on the lock.
+     * sync内部类，继承了aqs
      */
     abstract static class Sync extends AbstractQueuedSynchronizer {
         private static final long serialVersionUID = -5179523762034025860L;
@@ -128,6 +129,7 @@ public class ReentrantLock implements Lock, java.io.Serializable {
          */
         // ReentrantLock 默认是非公平模式，这里给出了非公平模式下的尝试获取锁
         final boolean nonfairTryAcquire(int acquires) {
+            // 获取当前线程
             final Thread current = Thread.currentThread();
             // AbstractQueuedSynchronizer 的state常用于保存资源被占用状态，这里保存ReentrantLock锁状态，=0表示现在锁现在没被占用
             int c = getState();
@@ -140,10 +142,14 @@ public class ReentrantLock implements Lock, java.io.Serializable {
             }
             // 如果锁已被占用，看是否是当前线程，如果是，可重入
             else if (current == getExclusiveOwnerThread()) {
+                // 将state加1
                 int nextc = c + acquires;
+                // 如果加1后，超出了锁重入的最大值，抛出异常
                 if (nextc < 0) // overflow
                     throw new Error("Maximum lock count exceeded");
+                //没问题就更新锁的状态值
                 setState(nextc);
+                //重入成功
                 return true;
             }
             return false;
@@ -216,6 +222,7 @@ public class ReentrantLock implements Lock, java.io.Serializable {
         final void lock() {
             // 这里判断是否有其他资源占用，cas设置成功，说明当前线程获取成功(如果刚好有线程释放了锁，正好这边尝试成功了，那么这个线程就插队进来了)
             if (compareAndSetState(0, 1))
+                //将一个属性设置为当前的线程，这个属性是由AQS父类提供的
                 setExclusiveOwnerThread(Thread.currentThread());
             else
                 acquire(1);//否则走正常的申请流程，就是这里会调用tryAcquire方法

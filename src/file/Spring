@@ -20,11 +20,10 @@
 三级缓存： createBeanInstance（addSingletonFactory）
 二级缓存： 第一次在三级缓存中判断对象是普通对象还是代理对象的时候会添加，同时会删除三级缓存。(getSingleton)
 一级缓存： 生成完整的对象的时候放入,删除二三级缓存。（addSingleton）
-
 ##4. FactoryBean 和 BeanFactory有什么区别？
 BeanFactory是创建bean的工厂类，里面用到的反射的技术来对对象创建。
 FactoryBean是一个bean, 如果想简单的定义某一个bean的对象，还不需要spring来管理整个bean的生命周期，就可以实现此接口了。
-## Spring中的设计模式
+##5.Spring中的设计模式
 1. 单例模式
    - spring的ioc中的bean默认都是单例的。
 2. 工厂模式
@@ -34,3 +33,21 @@ FactoryBean是一个bean, 如果想简单的定义某一个bean的对象，还�
 4. 模板方法
    - 各种postProcess
 ##6. Spring的事务（未整理）
+   
+##7. SpringAop切面的原理
+基于动态代理实现，在编译器期间修改字节码，在运行期字节码加载之前修改字节码，或者是加载以后动态创建代理类的字节码。
+1. 启动时注册AnnotationAwareAspectJAutoProxyCreator，这是一个BeaPostProcessor，初始化时候会调用该类postProcessAfterInitialization方法进行包装返回代理类
+2. 初始化时：对需要进行代理的类，进行处理，获取该bean的Advisor，匹配bean里面的所有方法，是否需要代理。然后再返回所有Advisor/Advice/Intecepter拦截对象，组成一个数组，设置到proxyFactory中，通过proxyFactory创建对应的jdk或cglib代理类。
+3. 执行调用时，调用相应的代理类，并通过责任链模式调用bean所有Advice拦截对象处理相应代理逻辑。
+
+##8.jdk动态代理和cjlib动态代理区别
+- JDK动态代理
+代理类实现了**InvocationHandler**接口,创建一个代理类的对象,然后通过Proxy.newProxyInstance()方法,传入相应的(类加载器,被代理类,代理类对象),创建一个编织在一起后的实例,作为目标类的代理对象. 运行时,InvocationHandler会通过反射调用目标类中的方法,动态的将切面逻辑跟业务编织在一起.
+因为动态代理的代理对象是运行时创建的,我们没法通过常规操作查看对应的.class文件,可以通过ProxyGenerator.generateProxyClass()来生成
+
+- CGLIB动态代理(Enhancer类)
+运行时,动态的生成目标类的子类对象,子类对象的方法会覆盖父类的方法,并编织好切面逻辑.核心是通过集成做动态代理的,如果某个类无法被继承,就无法使用CGLIB做代理.
+  
+参考: https://zhuanlan.zhihu.com/p/206628333
+### 为什么JDK的动态代理只能基于接口实现，不能基于继承来实现？
+因为Java中不支持多继承，而JDK的动态代理在创建代理对象时，默认让代理对象继承了Proxy类，所以JDK只能通过接口去实现动态代理。
