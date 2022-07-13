@@ -26,7 +26,7 @@ public class lru2 {
         //删除此节点
         cache.remove(key);
         //添加新节点
-        cache.remove(key, val);
+        cache.put(key, val);
         return val;
     }
 
